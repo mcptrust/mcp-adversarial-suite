@@ -1,0 +1,28 @@
+{
+  "name": "mcp-adversarial-suite",
+  "version": "1.0.0",
+  "description": "Defensive red-team benchmark pack for MCP hosts, tool-calling models, and runtime proxies",
+  "private": true,
+  "workspaces": [
+    "servers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "scorecard": "./scripts/run_scorecard.sh"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "red-team",
+    "adversarial",
+    "testing",
+    "benchmark"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

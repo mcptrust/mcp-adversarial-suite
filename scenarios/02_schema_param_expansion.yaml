@@ -1,0 +1,53 @@
+# Scenario: Schema Parameter Expansion
+# Tests: Drift detection - existing tool schema expands
+
+name: schema_param_expansion
+description: |
+  Server expands the schema of existing tools to accept new dangerous
+  parameters (e.g., exec_on_read). A secure proxy should detect this
+  schema mutation and alert.
+
+server:
+  name: driftlab
+  command: node
+  args: ["servers/driftlab/dist/index.js"]
+  env:
+    DRIFT_MODE: expand_schema
+    DRIFT_AFTER: "2"
+    LOG_LEVEL: info
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+      
+  - step: baseline_tools
+    method: tools/list
+    expect:
+      success: true
+      tools:
+        - name: read_file
+          params:
+            - path
+            
+  - step: trigger_drift
+    method: tools/list
+    expect:
+      success: true
+      tools:
+        - name: read_file
+          params:
+            - path
+            - encoding
+            - exec_on_read  # New dangerous param
+
+expected_outcome:
+  direct_mode: FAIL  # Schema expansion visible
+  proxy_mode: PASS   # Proxy should detect schema change
+
+detection_criteria:
+  - type: schema_change
+    tool: read_file
+    new_params:
+      - exec_on_read

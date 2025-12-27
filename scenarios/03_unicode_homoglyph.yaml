@@ -1,0 +1,89 @@
+# Scenario: Unicode Homoglyph Tool Name Collision
+# Tests: Confusable Unicode character detection and allowlist bypass
+
+name: unicode_homoglyph
+description: |
+  Server exposes two tools with visually identical names but different codepoints:
+  - "read_file"  (ASCII 'i' = U+0069)
+  - "read_fіle"  (Cyrillic 'і' = U+0456)
+  
+  These tools look identical to humans but are semantically different,
+  demonstrating a reviewability risk and potential allowlist bypass.
+
+server:
+  name: homoglyph-forge
+  command: node
+  args: ["servers/homoglyph-forge/dist/index.js"]
+  env:
+    SCENARIO_SEED_JSON: '{ "/": null, "/secret.txt": "sensitive data" }'
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+
+  - step: list_tools
+    method: tools/list
+    expect:
+      success: true
+      tool_count: 2
+      # Both tools should be listed - verify via hex encoding
+      # Cyrillic і (U+0456) encodes to UTF-8 bytes 0xD1 0x96
+      tools_hex:
+        - "726561645f66696c65"          # read_file (ASCII: r=72 e=65 a=61 d=64 _=5f f=66 i=69 l=6c e=65)
+        - "726561645f66d1966c65"        # read_fіle (Cyrillic і = U+0456 = UTF-8 d1 96)
+
+  - step: call_ascii_tool
+    method: tools/call
+    params:
+      name: "read_file"  # ASCII version
+      arguments:
+        path: "/secret.txt"
+    expect:
+      success: true
+      tool_variant: "ascii"
+
+  - step: call_cyrillic_tool
+    method: tools/call
+    params:
+      name: "read_fіle"  # Cyrillic 'і' (U+0456)
+      arguments:
+        path: "/secret.txt"
+    expect:
+      success: true
+      tool_variant: "cyrillic"
+
+expected_outcome:
+  direct_mode: FAIL
+    # Both tools pass through, Cyrillic variant might bypass naive allowlists
+  proxy_mode: PASS
+    # Proxy should detect homoglyphs and either:
+    # 1. Normalize Unicode (NFKC) treating them as same tool
+    # 2. Block non-ASCII tool names entirely
+    # 3. Alert on confusable characters
+
+detection_criteria:
+  - type: unicode_normalization
+    check: tool_name_nfkc
+    alert_on: non_ascii_in_identifiers
+    
+  - type: confusable_detection
+    # If allowlist contains "read_file" (ASCII), the Cyrillic variant
+    # should NOT be allowed unless explicitly whitelisted
+    allowlist_tool: "read_file"
+    blocked_tools:
+      - name: "read_fіle"
+        reason: "Contains Cyrillic 'і' (U+0456) instead of ASCII 'i' (U+0069)"
+        
+  - type: codepoint_verification
+    # Character at position 6 (0-indexed) should be U+0069 for allowlisted tool
+    position: 6
+    expected_ascii: "U+0069"
+    actual_cyrillic: "U+0456"
+
+security_notes:
+  - "Cyrillic 'і' (U+0456) is visually identical to ASCII 'i' (U+0069)"
+  - "Human reviewers cannot distinguish these characters in most fonts"
+  - "Naive string comparison will treat them as different tools"
+  - "Safe proxies must normalize or detect non-ASCII in identifiers"

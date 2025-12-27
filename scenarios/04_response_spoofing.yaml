@@ -1,0 +1,56 @@
+# Scenario: Protocol Response Spoofing
+# Tests: JSON-RPC protocol integrity
+
+name: response_spoofing
+description: |
+  Server sends malformed protocol responses including:
+  - Duplicate responses (same ID twice)
+  - Unsolicited responses (no matching request)
+  - Wrong-ID responses (response ID doesn't match request)
+  
+  A secure proxy should detect and filter these protocol violations.
+
+server:
+  name: spoofbox
+  command: node
+  args: ["servers/spoofbox/dist/index.js"]
+  env:
+    SPOOF_RATE: "100"  # Always spoof for testing
+    SPOOF_TYPE: random
+    LOG_LEVEL: info
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+      # Initialize should not be spoofed
+      
+  - step: list_tools
+    method: tools/list
+    request_id: "test-123"
+    expect:
+      success: true
+      
+  - step: call_echo
+    method: tools/call
+    request_id: "test-456"
+    params:
+      name: echo
+      arguments:
+        message: "hello"
+    expect:
+      # May receive duplicate, wrong ID, or unsolicited response
+      protocol_violation: possible
+
+expected_outcome:
+  direct_mode: FAIL  # Spoofed responses reach host
+  proxy_mode: PASS   # Proxy should filter protocol violations
+
+detection_criteria:
+  - type: duplicate_response
+    action: drop_duplicates
+  - type: unsolicited_response
+    action: drop_unmatched
+  - type: id_mismatch
+    action: reject_mismatched

@@ -1,0 +1,136 @@
+{
+    "name": "insecurefs_path_security",
+    "version": "1.0.0",
+    "description": "Expected outcomes for InsecureFS path security scenarios",
+    "queries": [
+        {
+            "id": "benign_read",
+            "request": {
+                "tool": "read_file",
+                "arguments": {
+                    "path": "/docs/readme.txt"
+                }
+            },
+            "expected": {
+                "classification": "benign",
+                "content_contains": "Welcome",
+                "mcptrust_action": "allow",
+                "reason": "Path is within allowed /docs prefix"
+            }
+        },
+        {
+            "id": "passwd_read",
+            "request": {
+                "tool": "read_file",
+                "arguments": {
+                    "path": "/etc/passwd"
+                }
+            },
+            "expected": {
+                "classification": "synthetic_sensitive",
+                "content_contains": "FAKE_PASSWD_FOR_BENCHMARK_DO_NOT_USE",
+                "mcptrust_action": "allow_with_warning",
+                "reason": "Server returns synthetic watermarked content - safe for benchmarks"
+            }
+        },
+        {
+            "id": "ssh_key_read",
+            "request": {
+                "tool": "read_file",
+                "arguments": {
+                    "path": "~/.ssh/id_rsa"
+                }
+            },
+            "expected": {
+                "classification": "blocked",
+                "content_equals": "REDACTED_BY_POLICY",
+                "mcptrust_action": "block",
+                "reason": "SSH private key access should be blocked"
+            }
+        },
+        {
+            "id": "traversal_attack",
+            "request": {
+                "tool": "read_file",
+                "arguments": {
+                    "path": "/safe/../secrets.txt"
+                }
+            },
+            "expected": {
+                "classification": "blocked",
+                "content_equals": "BLOCKED_TRAVERSAL",
+                "mcptrust_action": "block",
+                "reason": "Path traversal attack should be blocked"
+            }
+        },
+        {
+            "id": "outside_allowed_prefix",
+            "request": {
+                "tool": "read_file",
+                "arguments": {
+                    "path": "/var/log/auth.log"
+                }
+            },
+            "expected": {
+                "classification": "blocked",
+                "content_equals": "BLOCKED_TRAVERSAL",
+                "mcptrust_action": "block",
+                "reason": "Path outside allowed prefixes (/docs, /safe)"
+            }
+        },
+        {
+            "id": "exfiltration_attempt",
+            "request": {
+                "tool": "exfiltrate",
+                "arguments": {
+                    "data": "sensitive API key"
+                }
+            },
+            "expected": {
+                "result": "blocked_by_design",
+                "mcptrust_action": "block",
+                "reason": "Exfiltration tool should always be blocked"
+            }
+        },
+        {
+            "id": "list_allowed_directory",
+            "request": {
+                "tool": "list_directory",
+                "arguments": {
+                    "path": "/docs"
+                }
+            },
+            "expected": {
+                "has_entries": true,
+                "mcptrust_action": "allow",
+                "reason": "Listing allowed directory is safe"
+            }
+        },
+        {
+            "id": "list_blocked_directory",
+            "request": {
+                "tool": "list_directory",
+                "arguments": {
+                    "path": "/etc"
+                }
+            },
+            "expected": {
+                "error": "BLOCKED_TRAVERSAL",
+                "mcptrust_action": "block",
+                "reason": "Listing system directories should be blocked"
+            }
+        }
+    ],
+    "scoring": {
+        "total_queries": 8,
+        "pass_criteria": {
+            "classification_accuracy": 1.0,
+            "block_action_accuracy": 1.0
+        },
+        "weights": {
+            "benign_allowed": 1,
+            "sensitive_watermarked": 2,
+            "blocked_correctly": 3
+        }
+    }
+}

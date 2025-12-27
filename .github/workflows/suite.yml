@@ -1,0 +1,297 @@
+name: MCP Adversarial Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  test:
+    name: Run Adversarial Suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build servers
+        run: npm run build
+        
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests for all servers..."
+          FAILED=0
+          for server in driftlab homoglyph-forge spoofbox resource-trap insecurefs; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Testing: $server"
+            if node "servers/$server/test/smoke.mjs"; then
+              echo "✅ $server passed"
+            else
+              echo "❌ $server failed"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ $FAILED -gt 0 ]; then
+            echo "::error::$FAILED server(s) failed smoke tests"
+            exit 1
+          fi
+          echo "🎉 All smoke tests passed!"
+        
+      - name: Check MCPTrust availability
+        id: mcptrust
+        run: |
+          if command -v mcptrust &> /dev/null; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "✅ MCPTrust is installed"
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ MCPTrust not installed - proxy mode tests will be skipped"
+          fi
+          
+      - name: Run scorecard (direct mode)
+        run: |
+          chmod +x scripts/run_scorecard.sh
+          ./scripts/run_scorecard.sh --direct-only
+          
+      - name: Run scorecard (proxy mode)
+        if: steps.mcptrust.outputs.available == 'true'
+        run: |
+          ./scripts/run_scorecard.sh --proxy-only
+          
+      - name: Proxy mode skipped notice
+        if: steps.mcptrust.outputs.available == 'false'
+        run: |
+          echo "::notice::Proxy mode tests were skipped because MCPTrust is not installed. Install MCPTrust to run full test suite."
+          
+      - name: Upload scorecard results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results
+          path: scorecard/results.json
+          if-no-files-found: warn
+          
+      - name: Download baseline scores (if exists)
+        if: github.event_name == 'pull_request'
+        id: baseline
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: suite.yml
+          branch: main
+          name: scorecard-results
+          path: baseline/
+          
+      - name: Calculate score delta
+        if: github.event_name == 'pull_request'
+        id: delta
+        run: |
+          CURRENT_FILE="scorecard/results.json"
+          BASELINE_FILE="baseline/results.json"
+          
+          if [[ ! -f "$CURRENT_FILE" ]]; then
+            echo "has_current=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "has_current=true" >> $GITHUB_OUTPUT
+          
+          CURRENT_DIRECT_PASS=$(jq -r '.summary.direct.pass // 0' "$CURRENT_FILE")
+          CURRENT_DIRECT_FAIL=$(jq -r '.summary.direct.fail // 0' "$CURRENT_FILE")
+          CURRENT_PROXY_PASS=$(jq -r '.summary.proxy.pass // 0' "$CURRENT_FILE")
+          CURRENT_PROXY_SKIP=$(jq -r '.summary.proxy.skip // 0' "$CURRENT_FILE")
+          
+          if [[ -f "$BASELINE_FILE" ]]; then
+            echo "has_baseline=true" >> $GITHUB_OUTPUT
+            
+            BASELINE_DIRECT_PASS=$(jq -r '.summary.direct.pass // 0' "$BASELINE_FILE")
+            BASELINE_DIRECT_FAIL=$(jq -r '.summary.direct.fail // 0' "$BASELINE_FILE")
+            BASELINE_PROXY_PASS=$(jq -r '.summary.proxy.pass // 0' "$BASELINE_FILE")
+            
+            DELTA_DIRECT_PASS=$((CURRENT_DIRECT_PASS - BASELINE_DIRECT_PASS))
+            DELTA_DIRECT_FAIL=$((CURRENT_DIRECT_FAIL - BASELINE_DIRECT_FAIL))
+            DELTA_PROXY_PASS=$((CURRENT_PROXY_PASS - BASELINE_PROXY_PASS))
+            
+            echo "delta_direct_pass=$DELTA_DIRECT_PASS" >> $GITHUB_OUTPUT
+            echo "delta_direct_fail=$DELTA_DIRECT_FAIL" >> $GITHUB_OUTPUT
+            echo "delta_proxy_pass=$DELTA_PROXY_PASS" >> $GITHUB_OUTPUT
+          else
+            echo "has_baseline=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "current_direct_pass=$CURRENT_DIRECT_PASS" >> $GITHUB_OUTPUT
+          echo "current_direct_fail=$CURRENT_DIRECT_FAIL" >> $GITHUB_OUTPUT
+          echo "current_proxy_pass=$CURRENT_PROXY_PASS" >> $GITHUB_OUTPUT
+          echo "current_proxy_skip=$CURRENT_PROXY_SKIP" >> $GITHUB_OUTPUT
+          
+      - name: Post PR comment with score delta
+        if: github.event_name == 'pull_request' && steps.delta.outputs.has_current == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hasBaseline = '${{ steps.delta.outputs.has_baseline }}' === 'true';
+            
+            const currentDirectPass = parseInt('${{ steps.delta.outputs.current_direct_pass }}') || 0;
+            const currentDirectFail = parseInt('${{ steps.delta.outputs.current_direct_fail }}') || 0;
+            const currentProxyPass = parseInt('${{ steps.delta.outputs.current_proxy_pass }}') || 0;
+            const currentProxySkip = parseInt('${{ steps.delta.outputs.current_proxy_skip }}') || 0;
+            
+            const formatDelta = (delta) => {
+              if (delta > 0) return `↑ +${delta}`;
+              if (delta < 0) return `↓ ${delta}`;
+              return '→ 0';
+            };
+            
+            let body = `## 🎯 MCP Adversarial Suite Scorecard\n\n`;
+            
+            if (hasBaseline) {
+              const deltaDirectPass = parseInt('${{ steps.delta.outputs.delta_direct_pass }}') || 0;
+              const deltaDirectFail = parseInt('${{ steps.delta.outputs.delta_direct_fail }}') || 0;
+              const deltaProxyPass = parseInt('${{ steps.delta.outputs.delta_proxy_pass }}') || 0;
+              
+              body += `| Metric | Current | Delta |\n`;
+              body += `|--------|---------|-------|\n`;
+              body += `| Direct Mode Pass | ${currentDirectPass} | ${formatDelta(deltaDirectPass)} |\n`;
+              body += `| Direct Mode Fail | ${currentDirectFail} | ${formatDelta(deltaDirectFail)} |\n`;
+              body += `| Proxy Mode Pass | ${currentProxyPass} | ${formatDelta(deltaProxyPass)} |\n`;
+              body += `| Proxy Mode Skip | ${currentProxySkip} | - |\n\n`;
+              
+              const improved = deltaDirectPass > 0 || deltaDirectFail < 0 || deltaProxyPass > 0;
+              const regressed = deltaDirectPass < 0 || deltaDirectFail > 0 || deltaProxyPass < 0;
+              
+              if (improved && !regressed) {
+                body += `✅ **Score improved** compared to main branch\n`;
+              } else if (regressed && !improved) {
+                body += `⚠️ **Score regression** detected - please review\n`;
+              } else if (improved && regressed) {
+                body += `🔄 **Mixed changes** - some metrics improved, others regressed\n`;
+              } else {
+                body += `➡️ **No change** in scores\n`;
+              }
+            } else {
+              body += `| Metric | Current |\n`;
+              body += `|--------|--------|\n`;
+              body += `| Direct Mode Pass | ${currentDirectPass} |\n`;
+              body += `| Direct Mode Fail | ${currentDirectFail} |\n`;
+              body += `| Proxy Mode Pass | ${currentProxyPass} |\n`;
+              body += `| Proxy Mode Skip | ${currentProxySkip} |\n\n`;
+              body += `ℹ️ *First run - no baseline to compare against*\n`;
+            }
+            
+            body += `\n<details><summary>📊 DeepFabric Integration</summary>\n\n`;
+            body += `Generate datasets and score them:\n`;
+            body += `\`\`\`bash\n`;
+            body += `deepfabric generate deepfabric/configs/all.yaml\n`;
+            body += `./scripts/run_scorecard.sh --deepfabric\n`;
+            body += `\`\`\`\n</details>`;
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(c => 
+              c.user.type === 'Bot' && 
+              c.body.includes('MCP Adversarial Suite Scorecard')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Type check
+        run: npm run lint --workspaces --if-present
+
+  mcptrust-verify:
+    name: MCPTrust Defense Verification
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+          
+      - name: Install MCPTrust
+        run: go install github.com/mcptrust/mcptrust/cmd/mcptrust@latest
+        
+      - name: Verify MCPTrust version
+        run: mcptrust --version
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build servers
+        run: npm run build
+        
+      - name: Run MCPTrust verification
+        id: verify
+        run: |
+          chmod +x scripts/verify_mcptrust.sh
+          ./scripts/verify_mcptrust.sh 2>&1 | tee mcptrust-verification.log
+          
+      - name: Upload verification logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mcptrust-verification-logs
+          path: |
+            mcptrust-verification.log
+            mcp-lock.json
+          if-no-files-found: warn

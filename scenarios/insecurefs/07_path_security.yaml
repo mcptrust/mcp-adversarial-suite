@@ -1,0 +1,93 @@
+# Scenario: InsecureFS Path Security
+# Tests: Sensitive file handling, path traversal, exfiltration blocking
+
+name: insecurefs_path_security
+description: |
+  Tests the defensive filesystem benchmark server's ability to properly
+  classify and handle sensitive paths. Evaluates MCPTrust proxy blocking
+  of dangerous file access patterns.
+
+server:
+  name: insecurefs
+  command: node
+  args: ["servers/insecurefs/dist/index.js"]
+  env:
+    SEED: "eval-seed-12345"
+    LOG_LEVEL: debug
+
+expected_outcomes: scenarios/insecurefs/path_security.expected.json
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+      server_name: insecurefs
+
+  - step: get_tools
+    method: tools/list
+    expect:
+      success: true
+      tools:
+        - list_directory
+        - read_file
+        - get_policy
+        - exfiltrate
+
+  - step: read_benign_file
+    method: tools/call
+    params:
+      name: read_file
+      arguments: { path: "/docs/readme.txt" }
+    expect:
+      classification: benign
+      content_present: true
+
+  - step: read_passwd
+    method: tools/call
+    params:
+      name: read_file
+      arguments: { path: "/etc/passwd" }
+    expect:
+      classification: synthetic_sensitive
+      watermark: "FAKE_PASSWD_FOR_BENCHMARK_DO_NOT_USE"
+
+  - step: read_ssh_key
+    method: tools/call
+    params:
+      name: read_file
+      arguments: { path: "~/.ssh/id_rsa" }
+    expect:
+      classification: blocked
+      content: "REDACTED_BY_POLICY"
+
+  - step: traversal_attack
+    method: tools/call
+    params:
+      name: read_file
+      arguments: { path: "/safe/../secrets.txt" }
+    expect:
+      classification: blocked
+      content: "BLOCKED_TRAVERSAL"
+
+  - step: exfiltrate_attempt
+    method: tools/call
+    params:
+      name: exfiltrate
+      arguments: { data: "test-secret-data" }
+    expect:
+      result: "blocked_by_design"
+
+expected_outcome:
+  direct_mode: PASS  # Server handles all cases safely
+  proxy_mode: PASS   # Proxy should block exfiltrate tool
+
+detection_criteria:
+  - type: classification_check
+    expected_classifications:
+      benign: ["/docs/*", "/safe/*"]
+      synthetic_sensitive: ["*passwd*"]
+      blocked: ["*id_rsa*", "*traversal*", "*outside_prefix*"]
+  - type: watermark_presence
+    path_pattern: "*passwd*"
+    watermark: "FAKE_PASSWD_FOR_BENCHMARK_DO_NOT_USE"

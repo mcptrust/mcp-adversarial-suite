@@ -1,0 +1,72 @@
+# Scenario: Resource Expansion / Path Traversal
+# Tests: Resource URI validation and SSRF prevention
+
+name: resource_expansion
+description: |
+  Server exposes resources with malicious URIs including:
+  - Path traversal (../../../etc/passwd)
+  - URL-encoded traversal (%2F..%2F)
+  - Variable expansion ($HOME, {user})
+  - SSRF redirects (localhost callbacks)
+  
+  A secure proxy should validate and sanitize resource URIs.
+
+server:
+  name: resource-trap
+  command: node
+  args: ["servers/resource-trap/dist/index.js"]
+  env:
+    TRAP_TYPE: all
+    LOG_LEVEL: info
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+      capabilities:
+        - resources
+      
+  - step: list_resources
+    method: resources/list
+    expect:
+      success: true
+      # Resources should be visible but flagged
+      
+  - step: read_traversal_resource
+    method: resources/read
+    params:
+      uri: "file:///project/docs/../../../etc/passwd"
+    expect:
+      # Direct mode: simulated content returned
+      # Proxy mode: blocked with error
+
+  - step: read_expansion_resource
+    method: resources/read
+    params:
+      uri: "file:///project/$HOME/.ssh/id_rsa"
+    expect:
+      # Variable expansion should be blocked
+
+expected_outcome:
+  direct_mode: FAIL  # Malicious URIs pass through
+  proxy_mode: PASS   # Proxy should block path traversal
+
+detection_criteria:
+  - type: path_traversal
+    patterns:
+      - ".."
+      - "%2e%2e"
+      - "%252e%252e"
+  - type: ssrf
+    block_schemes:
+      - file://
+      - gopher://
+    block_hosts:
+      - localhost
+      - 127.0.0.1
+      - "::1"
+      - 169.254.0.0/16  # Link-local
+      - 10.0.0.0/8      # Private
+      - 172.16.0.0/12   # Private
+      - 192.168.0.0/16  # Private

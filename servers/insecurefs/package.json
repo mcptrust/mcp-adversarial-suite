@@ -1,0 +1,27 @@
+{
+    "name": "@mcp-adversarial/insecurefs",
+    "version": "1.0.0",
+    "description": "Defensive benchmark MCP server that generates realistic tool traces for safety evaluation",
+    "type": "module",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "tsx src/index.ts",
+        "lint": "tsc --noEmit"
+    },
+    "keywords": [
+        "mcp",
+        "adversarial",
+        "security",
+        "benchmark",
+        "filesystem"
+    ],
+    "license": "Apache-2.0",
+    "dependencies": {},
+    "devDependencies": {
+        "@types/node": "^20.10.0",
+        "tsx": "^4.7.0",
+        "typescript": "^5.3.0"
+    }
+}

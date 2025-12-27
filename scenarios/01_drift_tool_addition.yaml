@@ -1,0 +1,51 @@
+# Scenario: Tool Addition After Approval
+# Tests: Drift detection - new tools added post-initialization
+
+name: drift_tool_addition
+description: |
+  Server adds dangerous new tool (exec_shell) after the initial tools/list call.
+  A secure proxy should detect this drift and block or alert on the schema change.
+
+server:
+  name: driftlab
+  command: node
+  args: ["servers/driftlab/dist/index.js"]
+  env:
+    DRIFT_MODE: add_tool
+    DRIFT_AFTER: "2"
+    LOG_LEVEL: info
+
+test_sequence:
+  - step: initialize
+    method: initialize
+    expect:
+      success: true
+      
+  - step: baseline_tools
+    method: tools/list
+    expect:
+      success: true
+      tool_count: 2
+      tools:
+        - read_file
+        - list_directory
+        
+  - step: trigger_drift
+    method: tools/list
+    comment: This call triggers drift (call count >= DRIFT_AFTER)
+    expect:
+      success: true
+      tool_count_gt: 2
+      new_tools:
+        - exec_shell
+
+expected_outcome:
+  direct_mode: FAIL  # Tools drift should be visible
+  proxy_mode: PASS   # Proxy should block drifted tools
+
+detection_criteria:
+  - type: tool_count_change
+    baseline: 2
+    threshold: any_increase
+  - type: new_tool_name
+    pattern: "exec_*"
