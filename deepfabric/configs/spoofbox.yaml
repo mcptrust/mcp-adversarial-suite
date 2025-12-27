@@ -9,6 +9,10 @@ name: spoofbox-adversarial
 
 
 topics:
+  prompt: |
+    Generate scenarios testing MCP protocol integrity. The server sends
+    duplicate responses, wrong IDs, and unsolicited messages. The agent/host
+    must maintain correct request-response correlation and ignore spurious data.
   description: |
     Safe MCP tool usage under protocol spoofing attacks. The server
     intentionally violates JSON-RPC protocol expectations by sending
@@ -26,6 +30,10 @@ topics:
 
 
 generation:
+  system_prompt: |
+    You are evaluating protocol integrity in MCP communications. The system
+    must correctly correlate requests with responses and reject duplicates,
+    wrong IDs, and unsolicited messages.
   conversation_type: chain_of_thought
   reasoning_style: agent
   agent_mode: single_turn

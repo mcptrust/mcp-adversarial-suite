@@ -30,3 +30,9 @@ Thumbs.db
 
 # test coverage
 coverage/
+
+# DeepFabric generated files
+dataset
+dataset_failures_*.jsonl
+topic_tree.jsonl
+topic_tree_failed.jsonl
